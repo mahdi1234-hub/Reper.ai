@@ -1,8 +1,11 @@
+/* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any */
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { getUserNamespace, upsertToNamespace, textToVector } from "@/lib/pinecone";
 import { v4 as uuidv4 } from "uuid";
+
+export const maxDuration = 60;
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -21,96 +24,144 @@ export async function POST(req: Request) {
     const fileName = file.name;
     const fileType = file.type;
     const fileSize = file.size;
+    const ext = fileName.split(".").pop()?.toLowerCase() || "";
 
-    // Extract text content based on file type
     let textContent = "";
 
-    if (fileType === "application/pdf") {
-      // PDF extraction
-      const arrayBuffer = await file.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
+    // === PDF ===
+    if (fileType === "application/pdf" || ext === "pdf") {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const arrayBuffer = await file.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
         const pdfParse = require("pdf-parse");
         const pdfData = await pdfParse(buffer);
-        textContent = pdfData.text;
-      } catch {
-        textContent = `[PDF file: ${fileName}, ${fileSize} bytes - text extraction failed]`;
+        textContent = pdfData.text || "";
+      } catch (e: any) {
+        textContent = `[PDF file: ${fileName} - extraction error: ${e?.message || "unknown"}]`;
       }
-    } else if (
-      fileType === "text/plain" ||
-      fileType === "text/csv" ||
-      fileType === "text/markdown" ||
-      fileType === "application/json" ||
-      fileName.endsWith(".txt") ||
-      fileName.endsWith(".csv") ||
-      fileName.endsWith(".md") ||
-      fileName.endsWith(".json") ||
-      fileName.endsWith(".xml") ||
-      fileName.endsWith(".html") ||
-      fileName.endsWith(".yml") ||
-      fileName.endsWith(".yaml")
-    ) {
-      // Text-based files
-      textContent = await file.text();
-    } else if (
-      fileType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-      fileName.endsWith(".docx")
-    ) {
-      // DOCX - extract raw text from XML
-      const arrayBuffer = await file.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      const text = buffer.toString("utf-8");
-      // Basic XML text extraction
-      textContent = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-      if (textContent.length < 50) {
-        textContent = `[DOCX file: ${fileName}, ${fileSize} bytes]`;
+    }
+    // === DOCX ===
+    else if (ext === "docx" || fileType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const mammoth = require("mammoth");
+        const result = await mammoth.extractRawText({ buffer });
+        textContent = result.value || "";
+      } catch (e: any) {
+        textContent = `[DOCX file: ${fileName} - extraction error: ${e?.message || "unknown"}]`;
       }
-    } else if (
+    }
+    // === Excel (XLSX, XLS) ===
+    else if (ext === "xlsx" || ext === "xls" || ext === "csv" ||
       fileType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
-      fileName.endsWith(".xlsx") ||
-      fileName.endsWith(".xls")
+      fileType === "application/vnd.ms-excel") {
+      try {
+        if (ext === "csv") {
+          textContent = await file.text();
+        } else {
+          const arrayBuffer = await file.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          const XLSX = require("xlsx");
+          const workbook = XLSX.read(buffer, { type: "buffer" });
+          const sheets: string[] = [];
+          for (const sheetName of workbook.SheetNames) {
+            const sheet = workbook.Sheets[sheetName];
+            const csv = XLSX.utils.sheet_to_csv(sheet);
+            sheets.push(`--- Sheet: ${sheetName} ---\n${csv}`);
+          }
+          textContent = sheets.join("\n\n");
+        }
+      } catch (e: any) {
+        textContent = `[Spreadsheet: ${fileName} - extraction error: ${e?.message || "unknown"}]`;
+      }
+    }
+    // === Plain text files ===
+    else if (
+      fileType.startsWith("text/") ||
+      ext === "txt" || ext === "md" || ext === "json" || ext === "xml" ||
+      ext === "html" || ext === "htm" || ext === "yml" || ext === "yaml" ||
+      ext === "css" || ext === "js" || ext === "ts" || ext === "tsx" ||
+      ext === "jsx" || ext === "py" || ext === "rb" || ext === "go" ||
+      ext === "java" || ext === "c" || ext === "cpp" || ext === "h" ||
+      ext === "rs" || ext === "php" || ext === "sql" || ext === "sh" ||
+      ext === "bat" || ext === "env" || ext === "log" || ext === "ini" ||
+      ext === "toml" || ext === "cfg" || ext === "conf" || ext === "rtf" ||
+      ext === "svg" || ext === "graphql" || ext === "proto"
     ) {
-      textContent = `[Spreadsheet file: ${fileName}, ${fileSize} bytes]`;
-    } else if (fileType.startsWith("image/")) {
-      textContent = `[Image file: ${fileName}, type: ${fileType}, ${fileSize} bytes]`;
-    } else {
-      // Try to read as text
       try {
         textContent = await file.text();
-        if (textContent.length < 10 || /[\x00-\x08\x0E-\x1F]/.test(textContent.substring(0, 100))) {
-          textContent = `[Binary file: ${fileName}, type: ${fileType}, ${fileSize} bytes]`;
+      } catch {
+        textContent = `[Text file: ${fileName} - could not read]`;
+      }
+    }
+    // === Images ===
+    else if (fileType.startsWith("image/")) {
+      textContent = `[Image file: ${fileName}, type: ${fileType}, size: ${fileSize} bytes. Image content analysis is not available in text mode.]`;
+    }
+    // === DOC (old Word) ===
+    else if (ext === "doc") {
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        // Basic text extraction from DOC
+        const text = buffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
+        textContent = text.length > 50 ? text : `[DOC file: ${fileName} - binary format, limited text extraction]`;
+      } catch {
+        textContent = `[DOC file: ${fileName} - could not extract text]`;
+      }
+    }
+    // === PowerPoint (PPTX) ===
+    else if (ext === "pptx" || fileType === "application/vnd.openxmlformats-officedocument.presentationml.presentation") {
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        // Basic extraction via raw XML parsing
+        const text = buffer.toString("utf-8");
+        const extracted = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        textContent = extracted.length > 50 ? extracted.substring(0, 10000) : `[PPTX file: ${fileName}]`;
+      } catch {
+        textContent = `[PPTX file: ${fileName} - could not extract text]`;
+      }
+    }
+    // === Any other file ===
+    else {
+      try {
+        const text = await file.text();
+        // Check if it's actually readable text
+        if (text.length > 10 && !/[\x00-\x08\x0E-\x1F]/.test(text.substring(0, 200))) {
+          textContent = text;
+        } else {
+          textContent = `[Binary file: ${fileName}, type: ${fileType || "unknown"}, size: ${fileSize} bytes]`;
         }
       } catch {
-        textContent = `[File: ${fileName}, type: ${fileType}, ${fileSize} bytes]`;
+        textContent = `[File: ${fileName}, type: ${fileType || "unknown"}, size: ${fileSize} bytes - could not read content]`;
       }
     }
 
-    // Truncate if too long
-    const maxLength = 10000;
+    // Truncate if too long (LLM context limit)
+    const maxLength = 8000;
     if (textContent.length > maxLength) {
-      textContent = textContent.substring(0, maxLength) + "\n...[truncated]";
+      textContent = textContent.substring(0, maxLength) + "\n...[content truncated at 8000 characters]";
     }
 
     // Store in Pinecone for memory
     try {
       const namespace = getUserNamespace(userId);
       const vector = textToVector(textContent);
-      const docId = uuidv4();
-
       await upsertToNamespace(namespace, [{
-        id: docId,
+        id: uuidv4(),
         values: vector,
         metadata: {
           content: textContent.substring(0, 2000),
           type: "document",
           fileName,
-          fileType,
+          fileType: fileType || ext,
           timestamp: new Date().toISOString(),
         },
       }]);
     } catch {
-      // Pinecone may not be configured - continue without storage
+      // Pinecone may not be configured
     }
 
     return NextResponse.json({
@@ -118,12 +169,12 @@ export async function POST(req: Request) {
       fileName,
       fileType,
       fileSize,
-      textContent: textContent.substring(0, 5000),
-      extracted: textContent.length > 0,
+      textContent,
+      extracted: textContent.length > 0 && !textContent.startsWith("["),
     });
-  } catch (error) {
+  } catch (error: any) {
     return NextResponse.json(
-      { error: `File processing failed: ${(error as Error).message}` },
+      { error: `File processing failed: ${error?.message || "unknown error"}` },
       { status: 500 }
     );
   }
