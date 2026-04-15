@@ -22,9 +22,6 @@ const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/contacts.readonly",
   "https://www.googleapis.com/auth/tasks",
   "https://www.googleapis.com/auth/tasks.readonly",
-  "https://www.googleapis.com/auth/admin.directory.user.readonly",
-  "https://www.googleapis.com/auth/chat.messages",
-  "https://www.googleapis.com/auth/chat.spaces",
 ].join(" ");
 
 export const authOptions: NextAuthOptions = {
@@ -37,13 +34,14 @@ export const authOptions: NextAuthOptions = {
         params: {
           scope: GOOGLE_SCOPES,
           access_type: "offline",
-          prompt: "consent",
+          prompt: "select_account",
         },
       },
     }),
   ],
   session: {
     strategy: "jwt",
+    maxAge: 30 * 24 * 60 * 60, // 30 days
   },
   callbacks: {
     async jwt({ token, account, user }) {
@@ -66,8 +64,16 @@ export const authOptions: NextAuthOptions = {
       }
       return session;
     },
+    async redirect({ url, baseUrl }) {
+      // Always redirect to /chat after sign in
+      if (url.startsWith("/")) return `${baseUrl}${url}`;
+      if (url.startsWith(baseUrl)) return url;
+      return `${baseUrl}/chat`;
+    },
   },
   pages: {
     signIn: "/auth/signin",
   },
+  secret: process.env.NEXTAUTH_SECRET,
+  debug: false,
 };
