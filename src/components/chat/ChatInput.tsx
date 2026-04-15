@@ -28,7 +28,7 @@ interface ContextItem {
 interface ChatInputProps {
   input: string;
   onInputChange: (value: string) => void;
-  onSubmit: (e: React.FormEvent) => void;
+  onSubmit: (e: React.FormEvent, fileContents?: string[]) => void;
   isLoading: boolean;
   onStop: () => void;
   hasMessages: boolean;
@@ -95,10 +95,40 @@ export default function ChatInput({
     setShowContext(false);
   };
 
+  const uploadAndExtractFiles = async (): Promise<string[]> => {
+    const contents: string[] = [];
+    for (const f of files) {
+      try {
+        const formData = new FormData();
+        formData.append("file", f.file);
+        const res = await fetch("/api/upload", { method: "POST", body: formData });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.textContent) {
+            contents.push(`[File: ${f.name}]\n${data.textContent}`);
+          }
+        }
+      } catch {
+        contents.push(`[File: ${f.name} - could not extract content]`);
+      }
+    }
+    return contents;
+  };
+
+  const handleFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    let fileContents: string[] = [];
+    if (files.length > 0) {
+      fileContents = await uploadAndExtractFiles();
+      setFiles([]);
+    }
+    onSubmit(e, fileContents);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      onSubmit(e as unknown as React.FormEvent);
+      handleFormSubmit(e as unknown as React.FormEvent);
     }
     if (e.key === "@") {
       setShowContext(true);
@@ -177,7 +207,7 @@ export default function ChatInput({
         </AnimatePresence>
 
         {/* Input area */}
-        <form onSubmit={onSubmit} {...getRootProps()} className="relative">
+        <form onSubmit={handleFormSubmit} {...getRootProps()} className="relative">
           <input {...getInputProps()} />
           <textarea
             ref={textareaRef}

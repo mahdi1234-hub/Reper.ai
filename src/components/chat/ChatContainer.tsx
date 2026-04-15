@@ -152,9 +152,13 @@ export default function ChatContainer({ conversationId, onConversationCreated }:
     [messages, isLoading, currentConversationId, onConversationCreated]
   );
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent, fileContents?: string[]) => {
     e.preventDefault();
-    sendMessage(input);
+    let messageContent = input;
+    if (fileContents && fileContents.length > 0) {
+      messageContent = input + "\n\n--- Attached Files ---\n" + fileContents.join("\n\n");
+    }
+    sendMessage(messageContent);
   };
 
   const handleStop = () => {

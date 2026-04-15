@@ -46,7 +46,7 @@ export function getUserNamespace(userId: string): string {
 
 // Simple text to vector embedding using a basic hash approach
 // In production, use a proper embedding model
-export function textToVector(text: string, dimensions: number = 1024): number[] {
+export function textToVector(text: string, dimensions: number = 1536): number[] {
   const vector: number[] = new Array(dimensions).fill(0);
   for (let i = 0; i < text.length; i++) {
     vector[i % dimensions] += text.charCodeAt(i) / 255;
