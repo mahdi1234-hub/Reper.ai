@@ -66,7 +66,7 @@ Guidelines:
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "llama-3.3-70b",
+        model: "llama3.1-8b",
         messages: apiMessages,
         stream: true,
         max_tokens: 2048,

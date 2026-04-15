@@ -104,10 +104,13 @@ export default function ChatContainer({ conversationId, onConversationCreated }:
           signal: abortRef.current.signal,
         });
 
-        if (!res.ok) throw new Error("Failed to send message");
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(errorText || `API error: ${res.status}`);
+        }
 
         const reader = res.body?.getReader();
-        if (!reader) throw new Error("No reader");
+        if (!reader) throw new Error("No response stream");
 
         const decoder = new TextDecoder();
         let fullContent = "";
